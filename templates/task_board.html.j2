@@ -1,0 +1,139 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
+  <div>
+    <h2 class="mb-1">Task board</h2>
+    <p class="text-muted mb-0">Open work requests are matched to members with relevant skills and recent activity.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('feed') }}">Back to feed</a>
+</div>
+
+{% if session.get('user_id') %}
+<div class="card shadow-sm mb-4">
+  <div class="card-body">
+    <h5 class="card-title">Post a new task request</h5>
+    <form action="{{ url_for('create_task') }}" method="POST">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label" for="task-title">Task title</label>
+          <input class="form-control" id="task-title" type="text" name="title" placeholder="e.g. Design feedback for onboarding" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="task-skills">Skills or interests</label>
+          <input class="form-control" id="task-skills" type="text" name="skills" placeholder="UX, research, moderation, design" >
+        </div>
+      </div>
+      <div class="mt-3">
+        <label class="form-label" for="task-description">What needs doing?</label>
+        <textarea class="form-control" id="task-description" name="description" rows="4" placeholder="Describe the contribution needed, the desired outcome, and any constraints." required></textarea>
+      </div>
+
+      {% if possible_assignees %}
+      <div class="mt-3">
+        <label class="form-label" for="assignee-select">Ask specific people directly</label>
+        <select class="form-select" id="assignee-select" name="assignee">
+          <option value="">No specific person</option>
+          {% for member in possible_assignees %}
+          <option value="{{ member.id }}">{{ member.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+
+      <div class="d-flex justify-content-end mt-3">
+        <button type="submit" class="btn btn-primary">Publish task</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  {% if tasks %}
+    {% for item in tasks %}
+    {% set task = item.task %}
+    <div class="col-12">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+            <div>
+              <div class="text-uppercase text-muted small fw-bold">Task request</div>
+              <h4 class="mb-1">{{ task.title }}</h4>
+              <div class="text-muted small">Posted by {{ item.post.username }} · {{ item.post.created_at|datetimeformat }}</div>
+            </div>
+            {% if current_user_id and current_user_id not in (task.claimed_by or []) %}
+            <form action="{{ url_for('claim_task', post_id=item.post.id) }}" method="POST">
+              <button type="submit" class="btn btn-outline-primary btn-sm">Claim task</button>
+            </form>
+            {% elif current_user_id %}
+            <span class="badge text-bg-success">Claimed</span>
+            {% endif %}
+          </div>
+
+          <p class="mt-3 mb-3">{{ task.description }}</p>
+
+          {% if task.skills %}
+          <div class="mb-3">
+            <strong>Skills needed:</strong>
+            {% for skill in task.skills %}
+            <span class="badge rounded-pill text-bg-light border me-1">{{ skill }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if item.requested_users %}
+          <div class="mb-3">
+            <strong>Requested members:</strong>
+            {% for member_id in item.requested_users %}
+              {% set match = namespace(username='Member') %}
+              {% for user in possible_assignees %}
+                {% if user.id == member_id %}{% set match.username = user.username %}{% endif %}
+              {% endfor %}
+              <span class="badge rounded-pill text-bg-secondary me-1">{{ match.username }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if item.claimed_by %}
+          <div class="mb-3">
+            <strong>Claimed by:</strong>
+            {% for member_id in item.claimed_by %}
+              {% for user in possible_assignees %}
+                {% if user.id == member_id %}
+                <span class="badge rounded-pill text-bg-success me-1">{{ user.username }}</span>
+                {% endif %}
+              {% endfor %}
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          <div class="border-top pt-3 mt-3">
+            <h6 class="mb-3">Suggested contributors</h6>
+            {% if item.suggested_users %}
+            <div class="d-flex flex-wrap gap-2">
+              {% for user in item.suggested_users %}
+              <span class="badge text-bg-light border fs-6">
+                {{ user.username }} <small class="text-muted">({{ user.score }} match)</small>
+              </span>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">No clear matches yet. The request is still open for anyone who is interested.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+  <div class="col-12">
+    <div class="card border-dashed text-center py-5">
+      <div class="card-body">
+        <h4 class="mb-2">No task requests yet</h4>
+        <p class="text-muted mb-0">Create the first request to match people to specific work.</p>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

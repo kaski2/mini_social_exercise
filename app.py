@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, g
+from flask import Flask, render_template, request, redirect, url_for, session, flash, g, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import collections
@@ -88,6 +88,149 @@ def datetimeformat(value):
         return "N/A"
     return dt.strftime('%b %d, %Y %H:%M')
 
+TASK_PREFIX = '[TASK]'
+
+
+def is_task_post(content):
+    return isinstance(content, str) and content.startswith(TASK_PREFIX)
+
+
+def encode_task_payload(task_data):
+    return TASK_PREFIX + json.dumps(task_data, ensure_ascii=False)
+
+
+def decode_task_payload(content):
+    if not is_task_post(content):
+        return None
+    try:
+        payload = json.loads(content[len(TASK_PREFIX):])
+        if isinstance(payload, dict):
+            return payload
+    except (TypeError, ValueError):
+        pass
+    return {
+        'title': 'Task request',
+        'description': content[len(TASK_PREFIX):],
+        'skills': [],
+        'requested_users': [],
+        'claimed_by': []
+    }
+
+
+def parse_skill_list(raw_skills):
+    if not raw_skills:
+        return []
+    skills = [skill.strip().lower() for skill in re.split(r'[,;\n]+', raw_skills) if skill.strip()]
+    unique_skills = []
+    for skill in skills:
+        if skill not in unique_skills:
+            unique_skills.append(skill)
+    return unique_skills[:8]
+
+
+def task_keywords(task_data):
+    skills = [str(item).strip().lower() for item in task_data.get('skills', [])]
+    title = str(task_data.get('title', '')).lower()
+    desc = str(task_data.get('description', '')).lower()
+    merged = []
+    for entry in skills + [title, desc]:
+        for part in re.split(r'[^a-z0-9]+', entry):
+            if part:
+                merged.append(part)
+    return merged
+
+
+def find_task_matches(task_data, current_user_id=None, limit=3):
+    if not task_data:
+        return []
+
+    keywords = set(task_keywords(task_data))
+    if not keywords:
+        keywords = {'help', 'task'}
+
+    users = query_db('SELECT id, username, profile FROM users ORDER BY username ASC')
+    matches = []
+
+    for user in users:
+        if current_user_id and user['id'] == current_user_id:
+            continue
+        text_blob = ' '.join(filter(None, [user['username'], user['profile']])).lower()
+        recent_posts = query_db(
+            'SELECT content FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 5',
+            (user['id'],)
+        )
+        for post in recent_posts:
+            text_blob += ' ' + (post['content'] or '').lower()
+
+        score = 0
+        for keyword in keywords:
+            if keyword in text_blob:
+                score += 2
+        if any(skill in text_blob for skill in [k for k in keywords if len(k) > 2]):
+            score += 1
+
+        if score <= 0:
+            continue
+
+        matches.append({
+            'id': user['id'],
+            'username': user['username'],
+            'score': score,
+            'match_reason': 'Matches task keywords and recent activity'
+        })
+
+    matches.sort(key=lambda item: (-item['score'], item['username']))
+    return matches[:limit]
+
+
+def get_task_preview(limit=3):
+    task_rows = query_db('''
+        SELECT p.id, p.content, p.created_at, u.username, u.id as user_id
+        FROM posts p
+        JOIN users u ON p.user_id = u.id
+        WHERE p.content LIKE ?
+        ORDER BY p.created_at DESC
+        LIMIT ?
+    ''', (TASK_PREFIX + '%', limit))
+
+    preview = []
+    for row in task_rows:
+        payload = decode_task_payload(row['content'])
+        if not payload:
+            continue
+        preview.append({
+            'post': dict(row),
+            'task': payload,
+            'suggested_users': find_task_matches(payload, session.get('user_id'), limit=3),
+            'requested_users': payload.get('requested_users', [])
+        })
+    return preview
+
+
+def get_task_posts_for_board():
+    rows = query_db('''
+        SELECT p.id, p.content, p.created_at, u.username, u.id as user_id
+        FROM posts p
+        JOIN users u ON p.user_id = u.id
+        WHERE p.content LIKE ?
+        ORDER BY p.created_at DESC
+    ''', (TASK_PREFIX + '%',))
+
+    items = []
+    for row in rows:
+        payload = decode_task_payload(row['content'])
+        if not payload:
+            continue
+        items.append({
+            'post': dict(row),
+            'task': payload,
+            'suggested_users': find_task_matches(payload, session.get('user_id'), limit=4),
+            'requested_users': payload.get('requested_users', []),
+            'claimed_by': payload.get('claimed_by', [])
+        })
+    return items
+
+
 REACTION_EMOJIS = {
     'like': '❤️', 'love': '😍', 'laugh': '😂',
     'wow': '😮', 'sad': '😢', 'angry': '😠',
@@ -111,12 +254,20 @@ def feed():
 
     current_user_id = session.get('user_id')
     params = []
+    task_filter = "AND p.content NOT LIKE ?"
+    params.append(TASK_PREFIX + '%')
 
     #  2. Build the Query 
     where_clause = ""
     if show == 'following' and current_user_id:
         where_clause = "WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)"
         params.append(current_user_id)
+
+    if where_clause:
+        where_clause += " AND p.content NOT LIKE ?"
+        params.append(TASK_PREFIX + '%')
+    else:
+        where_clause = "WHERE p.content NOT LIKE ?"
 
     # Add the pagination parameters to the query arguments
     pagination_params = (POSTS_PER_PAGE, offset)
@@ -937,6 +1088,87 @@ def recommend(user_id, filter_following):
     recommended_posts = {} 
 
     return recommended_posts;
+
+@app.route('/tasks')
+def task_board():
+    current_user_id = session.get('user_id')
+    possible_assignees = []
+    if current_user_id:
+        possible_assignees = query_db('SELECT id, username FROM users WHERE id != ? ORDER BY username ASC', (current_user_id,))
+    else:
+        possible_assignees = query_db('SELECT id, username FROM users ORDER BY username ASC')
+
+    return render_template('task_board.html.j2',
+                           tasks=get_task_posts_for_board(),
+                           current_user_id=current_user_id,
+                           possible_assignees=possible_assignees,
+                           task_prefix=TASK_PREFIX)
+
+
+@app.route('/tasks/new', methods=['POST'])
+def create_task():
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('You must be logged in to create a task request.', 'danger')
+        return redirect(url_for('login'))
+
+    title = (request.form.get('title') or '').strip()
+    description = (request.form.get('description') or '').strip()
+    skills = parse_skill_list(request.form.get('skills') or '')
+    requested_users = request.form.getlist('assignee')
+
+    if not title or not description:
+        flash('Task title and description are required.', 'warning')
+        return redirect(request.referrer or url_for('feed'))
+
+    payload = {
+        'title': title,
+        'description': description,
+        'skills': skills,
+        'requested_users': [int(user_id_value) for user_id_value in requested_users if user_id_value.isdigit()],
+        'claimed_by': []
+    }
+
+    db = get_db()
+    db.execute(
+        'INSERT INTO posts (user_id, content) VALUES (?, ?)',
+        (user_id, encode_task_payload(payload))
+    )
+    db.commit()
+    flash('Your task request was created. Relevant contributors are now suggested.', 'success')
+    return redirect(url_for('task_board'))
+
+
+@app.route('/tasks/<int:post_id>/claim', methods=['POST'])
+def claim_task(post_id):
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('You must be logged in to claim a task.', 'danger')
+        return redirect(url_for('login'))
+
+    post = query_db('SELECT id, content FROM posts WHERE id = ?', (post_id,), one=True)
+    if not post:
+        flash('Task not found.', 'warning')
+        return redirect(url_for('feed'))
+
+    payload = decode_task_payload(post['content'])
+    if not payload:
+        flash('That post is not a valid task request.', 'warning')
+        return redirect(url_for('feed'))
+
+    claimed_by = payload.get('claimed_by', [])
+    if user_id not in claimed_by:
+        claimed_by.append(user_id)
+        payload['claimed_by'] = claimed_by
+
+    db = get_db()
+    db.execute(
+        'UPDATE posts SET content = ? WHERE id = ?',
+        (encode_task_payload(payload), post_id)
+    )
+    db.commit()
+    flash('You have claimed this task and are now listed as a contributor.', 'success')
+    return redirect(request.referrer or url_for('task_board'))
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)

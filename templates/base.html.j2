@@ -46,6 +46,9 @@
         <li class="nav-item">
           <a class="nav-link" href="/privacy">Privacy</a>
         </li>
+        <li class="nav-item">
+          <a href="{{ url_for('task_board') }}" class="nav-link">Task Board</a>
+        </li>
 
         <!-- Check if user is logged in -->
         {% if session.get('user_id') %}
