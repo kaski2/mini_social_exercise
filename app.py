@@ -1036,12 +1036,45 @@ def user_risk_analysis(user_id):
             password: admin
         Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
     """
-    
-    score = 0
 
-    return score;
+    user = query_db(
+        'SELECT id, profile, created_at FROM users WHERE id = ?',
+        (user_id,),
+        one=True
+    )
+    if not user:
+        return 0.0
 
-    
+    profile_score = moderate_content(user['profile'] or '')[1]
+
+    post_rows = query_db('SELECT content FROM posts WHERE user_id = ?', (user_id,))
+    post_scores = [moderate_content(post['content'] or '')[1] for post in post_rows]
+    average_post_score = sum(post_scores) / len(post_scores) if post_scores else 0.0
+
+    comment_rows = query_db('SELECT content FROM comments WHERE user_id = ?', (user_id,))
+    comment_scores = [moderate_content(comment['content'] or '')[1] for comment in comment_rows]
+    average_comment_score = sum(comment_scores) / len(comment_scores) if comment_scores else 0.0
+
+    content_risk_score = (profile_score * 1.0) + (average_post_score * 3.0) + (average_comment_score * 1.0)
+
+    created_at = user['created_at']
+    if isinstance(created_at, str):
+        try:
+            created_dt = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            created_dt = datetime.fromisoformat(created_at)
+    else:
+        created_dt = created_at
+
+    age_days = (datetime.utcnow() - created_dt).days if created_dt else 0
+    if age_days < 7:
+        content_risk_score *= 1.5
+    elif age_days < 30:
+        content_risk_score *= 1.2
+
+    return round(min(5.0, max(0.0, content_risk_score)), 2)
+
+
 # Assignment 2.1
 def moderate_content(content):
     """
@@ -1060,10 +1093,49 @@ def moderate_content(content):
     Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
     """
 
-    moderated_content = content
-    score = 0
-    
-    return moderated_content, score
+    if content is None:
+        return '', 0.0
+
+    text = str(content)
+    if not text.strip():
+        return '', 0.0
+
+    lowered = text.lower()
+
+    for tier1_word in TIER1_WORDS:
+        pattern = r'(?i)(?<!\w)' + re.escape(str(tier1_word)) + r'(?!\w)'
+        if re.search(pattern, lowered):
+            return '[content removed due to severe violation]', 5.0
+
+    for tier2_phrase in TIER2_PHRASES:
+        pattern = r'(?i)(?<!\w)' + re.escape(str(tier2_phrase)) + r'(?!\w)'
+        if re.search(pattern, text):
+            return '[content removed due to spam/scam policy]', 5.0
+
+    moderated = text
+    score = 0.0
+
+    for tier3_word in TIER3_WORDS:
+        pattern = r'(?i)(?<!\w)' + re.escape(str(tier3_word)) + r'(?!\w)'
+        matches = re.findall(pattern, moderated)
+        if matches:
+            score += len(matches) * 2.0
+            moderated = re.sub(pattern, lambda m: '*' * len(m.group(0)), moderated)
+
+    url_pattern = r'https?://[^\s]+|www\.[^\s]+'
+    url_matches = re.findall(url_pattern, moderated, flags=re.IGNORECASE)
+    if url_matches:
+        score += len(url_matches) * 2.0
+        moderated = re.sub(url_pattern, '[link removed]', moderated, flags=re.IGNORECASE)
+
+    alphabetic_count = sum(1 for ch in text if ch.isalpha())
+    if alphabetic_count > 15:
+        uppercase_count = sum(1 for ch in text if ch.isalpha() and ch.isupper())
+        uppercase_ratio = uppercase_count / alphabetic_count
+        if uppercase_ratio > 0.7:
+            score += 0.5
+
+    return moderated, round(score, 2)
 
 # Coding Assignment #3
 # Assignment 3.1
@@ -1250,6 +1322,76 @@ def mark_task_done(task_payload):
 
 def is_task_done(task_payload):
     return (task_payload or {}).get('status') == 'done'
+
+@app.route('/moderation')
+def moderation_center():
+    if session.get('username') != 'admin':
+        flash('You do not have permission to access moderation tools.', 'danger')
+        return redirect(url_for('feed'))
+
+    post_rows = query_db('''
+        SELECT p.id, p.content, p.created_at, u.username, u.id as user_id
+        FROM posts p
+        JOIN users u ON p.user_id = u.id
+        ORDER BY p.created_at DESC
+        LIMIT 50
+    ''')
+    flagged_posts = []
+    for post in post_rows:
+        moderated_content, score = moderate_content(post['content'])
+        if score <= 0:
+            continue
+        flagged_posts.append({
+            'id': post['id'],
+            'username': post['username'],
+            'content': moderated_content,
+            'score': score,
+            'action': 'removed' if 'removed' in moderated_content.lower() else 'censored',
+            'created_at': post['created_at']
+        })
+
+    comment_rows = query_db('''
+        SELECT c.id, c.content, c.created_at, u.username, c.post_id
+        FROM comments c
+        JOIN users u ON c.user_id = u.id
+        ORDER BY c.created_at DESC
+        LIMIT 50
+    ''')
+    flagged_comments = []
+    for comment in comment_rows:
+        moderated_content, score = moderate_content(comment['content'])
+        if score <= 0:
+            continue
+        flagged_comments.append({
+            'id': comment['id'],
+            'username': comment['username'],
+            'content': moderated_content,
+            'score': score,
+            'action': 'removed' if 'removed' in moderated_content.lower() else 'censored',
+            'created_at': comment['created_at'],
+            'post_id': comment['post_id']
+        })
+
+    user_rows = query_db('SELECT id, username, profile, created_at FROM users ORDER BY created_at DESC LIMIT 50')
+    risky_users = []
+    for user in user_rows:
+        score = user_risk_analysis(user['id'])
+        if score <= 0:
+            continue
+        risky_users.append({
+            'id': user['id'],
+            'username': user['username'],
+            'score': score,
+            'profile': moderate_content(user['profile'] or '')[0],
+            'created_at': user['created_at']
+        })
+
+    return render_template(
+        'moderation_center.html.j2',
+        flagged_posts=flagged_posts,
+        flagged_comments=flagged_comments,
+        risky_users=risky_users
+    )
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)

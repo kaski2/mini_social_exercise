@@ -1,0 +1,86 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<div class="container my-4">
+  <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+      <h2 class="mb-1">Moderation Center</h2>
+      <p class="text-muted mb-0">Moderation systems prescreen, label, and remove inappropriate messages to reduce damage.</p>
+    </div>
+    <a class="btn btn-primary" href="{{ url_for('admin_dashboard') }}">Admin Dashboard</a>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-lg-4">
+      <div class="card h-100 shadow-sm">
+        <div class="card-header bg-danger text-white">
+          <strong>Flagged posts</strong>
+        </div>
+        <div class="card-body">
+          {% if flagged_posts %}
+            {% for post in flagged_posts %}
+            <div class="border rounded p-3 mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong>{{ post.username }}</strong>
+                <span class="badge bg-danger">{{ post.score }}</span>
+              </div>
+              <p class="mb-2">{{ post.content }}</p>
+              <small class="text-muted">{{ post.action }} · {{ post.created_at|datetimeformat }}</small>
+            </div>
+            {% endfor %}
+          {% else %}
+            <p class="text-muted mb-0">No flagged posts.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card h-100 shadow-sm">
+        <div class="card-header bg-warning text-dark">
+          <strong>Flagged comments</strong>
+        </div>
+        <div class="card-body">
+          {% if flagged_comments %}
+            {% for comment in flagged_comments %}
+            <div class="border rounded p-3 mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong>{{ comment.username }}</strong>
+                <span class="badge bg-warning text-dark">{{ comment.score }}</span>
+              </div>
+              <p class="mb-2">{{ comment.content }}</p>
+              <small class="text-muted">{{ comment.action }} · {{ comment.created_at|datetimeformat }}</small>
+            </div>
+            {% endfor %}
+          {% else %}
+            <p class="text-muted mb-0">No flagged comments.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card h-100 shadow-sm">
+        <div class="card-header bg-secondary text-white">
+          <strong>Risky users</strong>
+        </div>
+        <div class="card-body">
+          {% if risky_users %}
+            {% for user in risky_users %}
+            <div class="border rounded p-3 mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong>{{ user.username }}</strong>
+                <span class="badge bg-secondary">{{ user.score }}</span>
+              </div>
+              <p class="mb-2 small text-muted">{{ user.profile }}</p>
+              <small class="text-muted">Joined {{ user.created_at|datetimeformat }}</small>
+            </div>
+            {% endfor %}
+          {% else %}
+            <p class="text-muted mb-0">No risky users.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
