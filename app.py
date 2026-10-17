@@ -113,7 +113,8 @@ def decode_task_payload(content):
         'description': content[len(TASK_PREFIX):],
         'skills': [],
         'requested_users': [],
-        'claimed_by': []
+        'claimed_by': [],
+        'status': 'open'
     }
 
 
@@ -226,7 +227,8 @@ def get_task_posts_for_board():
             'task': payload,
             'suggested_users': find_task_matches(payload, session.get('user_id'), limit=4),
             'requested_users': payload.get('requested_users', []),
-            'claimed_by': payload.get('claimed_by', [])
+            'claimed_by': payload.get('claimed_by', []),
+            'is_done': is_task_done(payload)
         })
     return items
 
@@ -1126,7 +1128,8 @@ def create_task():
         'description': description,
         'skills': skills,
         'requested_users': [int(user_id_value) for user_id_value in requested_users if user_id_value.isdigit()],
-        'claimed_by': []
+        'claimed_by': [],
+        'status': 'open'
     }
 
     db = get_db()
@@ -1146,7 +1149,7 @@ def claim_task(post_id):
         flash('You must be logged in to claim a task.', 'danger')
         return redirect(url_for('login'))
 
-    post = query_db('SELECT id, content FROM posts WHERE id = ?', (post_id,), one=True)
+    post = query_db('SELECT id, content, user_id FROM posts WHERE id = ?', (post_id,), one=True)
     if not post:
         flash('Task not found.', 'warning')
         return redirect(url_for('feed'))
@@ -1156,10 +1159,15 @@ def claim_task(post_id):
         flash('That post is not a valid task request.', 'warning')
         return redirect(url_for('feed'))
 
+    if is_task_done(payload):
+        flash('This task is already marked as done.', 'info')
+        return redirect(url_for('task_board'))
+
     claimed_by = payload.get('claimed_by', [])
     if user_id not in claimed_by:
         claimed_by.append(user_id)
         payload['claimed_by'] = claimed_by
+    payload['status'] = 'open'
 
     db = get_db()
     db.execute(
@@ -1169,6 +1177,79 @@ def claim_task(post_id):
     db.commit()
     flash('You have claimed this task and are now listed as a contributor.', 'success')
     return redirect(request.referrer or url_for('task_board'))
+
+
+@app.route('/tasks/<int:post_id>/done', methods=['POST'])
+def complete_task(post_id):
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('You must be logged in to update a task.', 'danger')
+        return redirect(url_for('login'))
+
+    post = query_db('SELECT id, content, user_id FROM posts WHERE id = ?', (post_id,), one=True)
+    if not post:
+        flash('Task not found.', 'warning')
+        return redirect(url_for('feed'))
+
+    payload = decode_task_payload(post['content'])
+    if not payload:
+        flash('That post is not a valid task request.', 'warning')
+        return redirect(url_for('feed'))
+
+    if post['user_id'] != user_id and user_id not in (payload.get('claimed_by') or []):
+        flash('You do not have permission to mark this task as done.', 'danger')
+        return redirect(request.referrer or url_for('task_board'))
+
+    payload['status'] = 'done'
+    db = get_db()
+    db.execute('UPDATE posts SET content = ? WHERE id = ?', (encode_task_payload(payload), post_id))
+    db.commit()
+    flash('Task marked as done.', 'success')
+    return redirect(request.referrer or url_for('task_board'))
+
+
+@app.route('/tasks/<int:post_id>/delete', methods=['POST'])
+def delete_task(post_id):
+    user_id = session.get('user_id')
+
+    # Block access if user is not logged in
+    if not user_id:
+        flash('You must be logged in to delete a task.', 'danger')
+        return redirect(url_for('login'))
+
+    # Find the task in the database
+    task = query_db('SELECT id, user_id FROM posts WHERE id = ?', (post_id,), one=True)
+
+    # Check if the task exists and if the current user is the owner
+    if not task:
+        flash('Task not found.', 'danger')
+        return redirect(url_for('task_board'))
+
+    if task['user_id'] != user_id:
+        # Security check: prevent users from deleting others' tasks
+        flash('You do not have permission to delete this task.', 'danger')
+        return redirect(url_for('task_board'))
+
+    # If all checks pass, proceed with deletion
+    db = get_db()
+    # To maintain database integrity, delete associated records first
+    db.execute('DELETE FROM comments WHERE post_id = ?', (post_id,))
+    db.execute('DELETE FROM reactions WHERE post_id = ?', (post_id,))
+    # Finally, delete the task itself
+    db.execute('DELETE FROM posts WHERE id = ?', (post_id,))
+    db.commit()
+
+    flash('Your task was successfully deleted.', 'success')
+    # Redirect back to the page the user came from, or the task board as a fallback
+    return redirect(request.referrer or url_for('task_board'))
+
+def mark_task_done(task_payload):
+    task_payload['status'] = 'done'
+    return task_payload
+
+
+def is_task_done(task_payload):
+    return (task_payload or {}).get('status') == 'done'
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)

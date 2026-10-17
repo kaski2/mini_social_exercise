@@ -68,9 +68,27 @@
             {% elif current_user_id %}
             <span class="badge text-bg-success">Claimed</span>
             {% endif %}
+            {% if current_user_id == item.post.user_id or current_user_id in (task.claimed_by or []) %}
+            <div class="d-flex gap-2 mt-2">
+              <form action="{{ url_for('complete_task', post_id=item.post.id) }}" method="POST">
+                <button type="submit" class="btn btn-success btn-sm">Mark done</button>
+              </form>
+              {% if current_user_id == item.post.user_id %}
+              <form action="{{ url_for('delete_task', post_id=item.post.id) }}" method="POST" onsubmit="return confirm('Delete this task request?');">
+                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+              </form>
+              {% endif %}
+            </div>
+            {% endif %}
           </div>
 
           <p class="mt-3 mb-3">{{ task.description }}</p>
+
+          {% if item.is_done or task.status == 'done' %}
+          <div class="alert alert-success py-2 px-3 mb-3">Status: Done</div>
+          {% else %}
+          <div class="alert alert-info py-2 px-3 mb-3">Status: Open</div>
+          {% endif %}
 
           {% if task.skills %}
           <div class="mb-3">
