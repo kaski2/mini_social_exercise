@@ -1122,7 +1122,7 @@ def moderate_content(content):
             score += len(matches) * 2.0
             moderated = re.sub(pattern, lambda m: '*' * len(m.group(0)), moderated)
 
-    url_pattern = r'https?://[^\s]+|www\.[^\s]+'
+    url_pattern = r'(?:https?://|www\.|\b[a-z0-9.-]+\.[a-z]{2,})(?:/[^\s]*)?'
     url_matches = re.findall(url_pattern, moderated, flags=re.IGNORECASE)
     if url_matches:
         score += len(url_matches) * 2.0
