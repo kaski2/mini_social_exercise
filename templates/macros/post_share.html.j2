@@ -1,0 +1,8 @@
+{% macro post_share(share_links) %}
+<div class="d-flex align-items-center gap-2 mt-2" aria-label="Share this post">
+  <span class="small text-muted">Share:</span>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ share_links.email }}">Email</a>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ share_links.twitter }}" target="_blank" rel="noopener noreferrer">Twitter</a>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ share_links.facebook }}" target="_blank" rel="noopener noreferrer">Facebook</a>
+</div>
+{% endmacro %}

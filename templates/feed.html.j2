@@ -1,10 +1,20 @@
 {% extends "base.html.j2" %}
 {% block content %}
 {% from "macros/user_macros.html.j2" import user_display %}
+{% from "macros/post_share.html.j2" import post_share %}
 
 <div class="align-center text-center">
   <img src="{{ url_for('static', filename='icon.png') }}" alt="Logo" style="height: 64px;" class="mb-4">
 </div>
+
+{% if not session.get('user_id') %}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="alert alert-info text-center mb-0">
+    <strong>{{ community_member_count }} people are already part of Mini Social.</strong>
+    <a href="{{ url_for('signup') }}" class="alert-link">Join the community</a> and share what interests you.
+  </div>
+</div>
+{% endif %}
 
 {% if session.get('user_id') %}
 <div class="col-md-8 mx-auto mb-4">
@@ -77,6 +87,7 @@
       </div>
       
       <p class="mt-2">{{ entry.post.content }}</p>
+      {{ post_share(entry.share_links) }}
 
       <!-- Reactions Display and Add Reaction Button -->
       <div class="d-flex align-items-center mt-2 mb-2">

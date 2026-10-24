@@ -1,6 +1,7 @@
 {% extends "base.html.j2" %}
 {% block content %}
 {% from "macros/user_macros.html.j2" import user_display %}
+{% from "macros/post_share.html.j2" import post_share %}
 
 <div class="col-md-8 mx-auto pt-4">
   <div class="card shadow-sm">
@@ -24,6 +25,7 @@
       </div>
       
       <p class="card-text mt-2">{{ post.content }}</p>
+      {{ post_share(share_links) }}
 
       <!-- Reactions Display and Add Reaction Button (Copied from feed.html.j2) -->
       <div class="d-flex align-items-center mt-2 mb-2">

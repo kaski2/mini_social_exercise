@@ -7,6 +7,7 @@ import sqlite3
 import hashlib
 import re
 from datetime import datetime
+from urllib.parse import urlencode
 
 app = Flask(__name__)
 app.secret_key = '123456789' 
@@ -238,6 +239,22 @@ REACTION_EMOJIS = {
     'wow': '😮', 'sad': '😢', 'angry': '😠',
 }
 REACTION_TYPES = list(REACTION_EMOJIS.keys())
+POSITIVE_REACTIONS = ('like', 'love', 'laugh')
+
+
+def make_post_share_links(post_id):
+    post_url = url_for('post_detail', post_id=post_id, _external=True)
+    return {
+        'email': 'mailto:?' + urlencode({
+            'subject': 'A post from Mini Social',
+            'body': f'I thought you might like this post: {post_url}'
+        }),
+        'facebook': 'https://www.facebook.com/sharer/sharer.php?' + urlencode({'u': post_url}),
+        'twitter': 'https://twitter.com/intent/tweet?' + urlencode({
+            'url': post_url,
+            'text': 'Check out this post on Mini Social'
+        })
+    }
 
 
 @app.route('/')
@@ -255,6 +272,7 @@ def feed():
     offset = (page - 1) * POSTS_PER_PAGE
 
     current_user_id = session.get('user_id')
+    community_member_count = query_db('SELECT COUNT(*) AS cnt FROM users', one=True)['cnt']
     params = []
     task_filter = "AND p.content NOT LIKE ?"
     params.append(TASK_PREFIX + '%')
@@ -341,6 +359,7 @@ def feed():
             'reactions': reactions,
             'user_reaction': user_reaction,
             'followed_poster': followed_poster,
+            'share_links': make_post_share_links(post_dict['id']),
             'comments': comments_moderated
         })
 
@@ -351,6 +370,7 @@ def feed():
                            current_show=show,
                            page=page, # Pass current page number
                            per_page=POSTS_PER_PAGE, # Pass items per page
+                           community_member_count=community_member_count,
                            reaction_emojis=REACTION_EMOJIS,
                            reaction_types=REACTION_TYPES)
 
@@ -549,6 +569,7 @@ def post_detail(post_id):
                            post=post,
                            reactions=reactions,
                            comments=comments,
+                           share_links=make_post_share_links(post['id']),
                            reaction_emojis=REACTION_EMOJIS,
                            reaction_types=REACTION_TYPES)
 
@@ -599,7 +620,8 @@ def signup():
             cur.close()
             db.close()
             
-    return render_template('signup.html.j2')
+    community_member_count = query_db('SELECT COUNT(*) AS cnt FROM users', one=True)['cnt']
+    return render_template('signup.html.j2', community_member_count=community_member_count)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1159,9 +1181,104 @@ def recommend(user_id, filter_following):
     - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
     """
 
-    recommended_posts = {} 
+    stop_words = {
+        'about', 'after', 'again', 'also', 'and', 'are', 'because', 'been',
+        'before', 'being', 'but', 'can', 'could', 'did', 'does', 'doing',
+        'down', 'each', 'for', 'from', 'get', 'got', 'had', 'has', 'have',
+        'her', 'here', 'him', 'his', 'how', 'into', 'its', 'just', 'more',
+        'most', 'not', 'our', 'out', 'over', 'own', 'same', 'she', 'should',
+        'some', 'such', 'than', 'that', 'the', 'their', 'them', 'then',
+        'there', 'these', 'they', 'this', 'those', 'through', 'too', 'under',
+        'use', 'used', 'using', 'very', 'was', 'were', 'what', 'when', 'where',
+        'which', 'while', 'who', 'will', 'with', 'would', 'you', 'your'
+    }
 
-    return recommended_posts;
+    def content_terms(content):
+        return {
+            term for term in re.findall(r"[a-z0-9']+", content.lower())
+            if len(term) > 2 and term not in stop_words
+        }
+
+    if user_id:
+        liked_posts = query_db('''
+            SELECT DISTINCT p.content
+            FROM posts p
+            JOIN reactions r ON r.post_id = p.id
+            WHERE r.user_id = ? AND r.reaction_type IN (?, ?, ?)
+              AND p.content NOT LIKE ?
+        ''', (user_id, *POSITIVE_REACTIONS, TASK_PREFIX + '%'))
+        preferred_terms = collections.Counter(
+            term for post in liked_posts for term in content_terms(post['content'])
+        )
+        followed_users = {
+            row['followed_id']
+            for row in query_db('SELECT followed_id FROM follows WHERE follower_id = ?', (user_id,))
+        }
+
+    else:
+        preferred_terms = collections.Counter()
+        followed_users = set()
+
+    if user_id:
+        candidate_sql = '''
+            SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id,
+                   COUNT(r.id) AS total_reactions
+            FROM posts p
+            JOIN users u ON u.id = p.user_id
+            LEFT JOIN reactions r ON r.post_id = p.id
+            WHERE p.user_id != ?
+              AND p.content NOT LIKE ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM reactions own_reaction
+                  WHERE own_reaction.post_id = p.id AND own_reaction.user_id = ?
+              )
+        '''
+        # The filter parameters are ordered to match the candidate query.
+        if filter_following:
+            candidate_sql += '''
+              AND p.user_id IN (
+                  SELECT followed_id FROM follows WHERE follower_id = ?
+              )
+            '''
+        candidate_sql += '''
+            GROUP BY p.id
+            ORDER BY p.created_at DESC, p.id DESC
+        '''
+        candidates = query_db(
+            candidate_sql,
+            (user_id, TASK_PREFIX + '%', user_id, *([user_id] if filter_following else []))
+        )
+    else:
+        candidates = query_db('''
+            SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id,
+                   COUNT(r.id) AS total_reactions
+            FROM posts p
+            JOIN users u ON u.id = p.user_id
+            LEFT JOIN reactions r ON r.post_id = p.id
+            WHERE p.content NOT LIKE ?
+            GROUP BY p.id
+            ORDER BY total_reactions DESC, p.created_at DESC, p.id DESC
+            LIMIT ?
+        ''', (TASK_PREFIX + '%', 5))
+
+    scored_posts = []
+    for row in candidates:
+        post = dict(row)
+        matching_terms = content_terms(post['content']) & preferred_terms.keys()
+        similarity_score = sum(preferred_terms[term] for term in matching_terms)
+        follow_score = 5 if post['user_id'] in followed_users else 0
+        score = similarity_score + follow_score
+        if not user_id:
+            score = post['total_reactions']
+        scored_posts.append((score, post['total_reactions'], post))
+
+    scored_posts.sort(
+        key=lambda item: (item[0], item[1], item[2]['created_at'], item[2]['id']),
+        reverse=True
+    )
+    selected_posts = [item[2] for item in scored_posts[:5]]
+    selected_posts.sort(key=lambda post: (post['created_at'], post['id']), reverse=True)
+    return selected_posts
 
 @app.route('/tasks')
 def task_board():
@@ -1395,4 +1512,3 @@ def moderation_center():
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
-
