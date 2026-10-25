@@ -228,6 +228,7 @@ def get_task_posts_for_board():
             'task': payload,
             'suggested_users': find_task_matches(payload, session.get('user_id'), limit=4),
             'requested_users': payload.get('requested_users', []),
+            'is_requested_for_current_user': session.get('user_id') in payload.get('requested_users', []),
             'claimed_by': payload.get('claimed_by', []),
             'is_done': is_task_done(payload)
         })
@@ -274,8 +275,6 @@ def feed():
     current_user_id = session.get('user_id')
     community_member_count = query_db('SELECT COUNT(*) AS cnt FROM users', one=True)['cnt']
     params = []
-    task_filter = "AND p.content NOT LIKE ?"
-    params.append(TASK_PREFIX + '%')
 
     #  2. Build the Query 
     where_clause = ""
@@ -285,9 +284,9 @@ def feed():
 
     if where_clause:
         where_clause += " AND p.content NOT LIKE ?"
-        params.append(TASK_PREFIX + '%')
     else:
         where_clause = "WHERE p.content NOT LIKE ?"
+    params.append(TASK_PREFIX + '%')
 
     # Add the pagination parameters to the query arguments
     pagination_params = (POSTS_PER_PAGE, offset)

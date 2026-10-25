@@ -84,6 +84,13 @@
 
           <p class="mt-3 mb-3">{{ task.description }}</p>
 
+          {% if item.is_requested_for_current_user %}
+          <div class="alert alert-warning py-2 px-3 mb-3" role="status">
+            <strong>Direct request for you.</strong>
+            {{ item.post.username }} specifically asked you to contribute to this task.
+          </div>
+          {% endif %}
+
           {% if item.is_done or task.status == 'done' %}
           <div class="alert alert-success py-2 px-3 mb-3">Status: Done</div>
           {% else %}
@@ -107,6 +114,7 @@
               {% for user in possible_assignees %}
                 {% if user.id == member_id %}{% set match.username = user.username %}{% endif %}
               {% endfor %}
+              {% if current_user_id == member_id %}{% set match.username = session.get('username') %}{% endif %}
               <span class="badge rounded-pill text-bg-secondary me-1">{{ match.username }}</span>
             {% endfor %}
           </div>
